@@ -18,7 +18,7 @@ const code = () => crypto.randomBytes(3).toString("hex").toUpperCase();
 const clean = s => String(s || "").trim().slice(0,24);
 function pubRoom(r) {
   return { code:r.code, hostId:r.hostId, status:r.status, round:r.round, letter:r.letter,
-    endsAt:r.endsAt, players:[...r.players.values()].map(p=>({id:p.id,name:p.name,score:p.score,host:p.id===r.hostId,ready:p.ready})),
+    endsAt:r.endsAt, players:[...r.players.values()].map(p=>({id:p.id,name:p.name,score:p.score,host:p.id===r.hostId,ready:p.ready,finished:!!p.finished})),
     maxPlayers:20, duration:r.duration, totalRounds:r.totalRounds, categories:r.categories, finished:r.status==="finished" };
 }
 function emitRoom(r) { io.to(r.code).emit("room:update", pubRoom(r)); }
@@ -73,15 +73,23 @@ io.on("connection", socket=>{
     if(r.round>=r.totalRounds)return cb?.({error:"Alle Runden sind bereits gespielt."});
     if(r.status==="playing")return cb?.({error:"Eine Runde läuft bereits."});
     r.round++;r.status="playing";r.letter=LETTERS[Math.floor(Math.random()*LETTERS.length)];
-    r.roundResults=[];for(const p of r.players.values())p.answers={};
+    r.roundResults=[];for(const p of r.players.values()){p.answers={};p.finished=false;}
     r.endsAt=Date.now()+r.duration*1000;stopTimer(r);r.timer=setTimeout(()=>endRound(r),r.duration*1000);
     emitRoom(r);io.to(r.code).emit("game:started",{round:r.round,letter:r.letter,endsAt:r.endsAt});cb?.({ok:true});
   });
   socket.on("answers:save",({code:c,answers},cb)=>{
     const r=rooms.get(String(c||"").toUpperCase()),p=r?.players.get(socket.id);
     if(!r||!p||r.status!=="playing")return cb?.({error:"Gerade läuft keine Runde."});
+    if(p.finished)return cb?.({error:"Du bist bereits fertig und kannst nichts mehr ändern."});
     const next={};for(const cat of r.categories)next[cat]=clean(answers?.[cat]||"").slice(0,50);
     p.answers=next;cb?.({ok:true});
+  });
+  socket.on("answers:finish",({code:c,answers},cb)=>{
+    const r=rooms.get(String(c||"").toUpperCase()),p=r?.players.get(socket.id);
+    if(!r||!p||r.status!=="playing")return cb?.({error:"Gerade läuft keine Runde."});
+    if(p.finished)return cb?.({ok:true,finished:true});
+    const next={};for(const cat of r.categories)next[cat]=clean(answers?.[cat]||"").slice(0,50);
+    p.answers=next;p.finished=true;emitRoom(r);cb?.({ok:true,finished:true});
   });
   socket.on("game:finish",({code:c},cb)=>{
     const r=rooms.get(String(c||"").toUpperCase());if(!r||r.hostId!==socket.id)return cb?.({error:"Nur der Host kann die Runde beenden."});
