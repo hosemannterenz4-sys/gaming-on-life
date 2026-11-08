@@ -11,14 +11,15 @@ app.use(express.static(path.join(__dirname, "public")));
 app.get("/health", (_req,res)=>res.json({ok:true, service:"Gaming On Life"}));
 
 const rooms = new Map();
-const CATS = ["Stadt","Land","Fluss","Tier","Name","Beruf"];
+const DEFAULT_CATS = ["Stadt","Land","Fluss","Tier","Name","Beruf"];
+const ALLOWED_CATS = [...DEFAULT_CATS,"Essen","Getränk","Pflanze","Sportart","Film","Serie","Videospiel","Promi","Marke","Gegenstand","Hobby","Farbe","Musiker","Buch","Superheld","Schulfach","Berufsort"];
 const LETTERS = "ABCDEFGHIJKLMNOPRSTUVW";
 const code = () => crypto.randomBytes(3).toString("hex").toUpperCase();
 const clean = s => String(s || "").trim().slice(0,24);
 function pubRoom(r) {
   return { code:r.code, hostId:r.hostId, status:r.status, round:r.round, letter:r.letter,
     endsAt:r.endsAt, players:[...r.players.values()].map(p=>({id:p.id,name:p.name,score:p.score,host:p.id===r.hostId,ready:p.ready})),
-    maxPlayers:20, duration:r.duration };
+    maxPlayers:20, duration:r.duration, totalRounds:r.totalRounds, categories:r.categories, finished:r.status==="finished" };
 }
 function emitRoom(r) { io.to(r.code).emit("room:update", pubRoom(r)); }
 function err(s,msg){s.emit("app:error",msg);}
@@ -28,10 +29,10 @@ function endRound(r){
   stopTimer(r); r.status="review";
   const entries=[...r.players.values()];
   const count={};
-  for(const p of entries) for(const c of CATS){const v=(p.answers[c]||"").trim();if(v){const k=c+"|"+v.toLocaleLowerCase("de-DE");count[k]=(count[k]||0)+1;}}
+  for(const p of entries) for(const c of r.categories){const v=(p.answers[c]||"").trim();if(v){const k=c+"|"+v.toLocaleLowerCase("de-DE");count[k]=(count[k]||0)+1;}}
   r.roundResults=entries.map(p=>{
     const details={}; let total=0;
-    for(const c of CATS){const v=(p.answers[c]||"").trim();const valid=!!v && v.toLocaleUpperCase("de-DE").startsWith(r.letter);
+    for(const c of r.categories){const v=(p.answers[c]||"").trim();const valid=!!v && v.toLocaleUpperCase("de-DE").startsWith(r.letter);
       const pts=!valid?0:(count[c+"|"+v.toLocaleLowerCase("de-DE")] > 1 ? 10:20);
       details[c]={answer:v,points:pts,valid}; total+=pts;
     }
@@ -44,10 +45,10 @@ io.on("connection", socket=>{
   socket.on("rooms:list",()=>{
     socket.emit("rooms:list", [...rooms.values()].filter(r=>r.status!=="closed").map(r=>({code:r.code,count:r.players.size,status:r.status,round:r.round})));
   });
-  socket.on("room:create",({name,duration},cb)=>{
+  socket.on("room:create",({name,duration,totalRounds,categories},cb)=>{
     name=clean(name); if(!name)return cb?.({error:"Bitte gib einen Spielernamen ein."});
     let c; do{c=code();}while(rooms.has(c));
-    const r={code:c,hostId:socket.id,status:"lobby",round:0,letter:null,endsAt:null,duration:[60,90,120].includes(+duration)?+duration:90,players:new Map(),timer:null,roundResults:[]};
+    const r={code:c,hostId:socket.id,status:"lobby",round:0,letter:null,endsAt:null,duration:[60,90,120].includes(+duration)?+duration:90,totalRounds:[3,5,10,15].includes(+totalRounds)?+totalRounds:5,categories:Array.isArray(categories)?ALLOWED_CATS.filter(c=>categories.includes(c)):DEFAULT_CATS,players:new Map(),timer:null,roundResults:[]};
     r.players.set(socket.id,{id:socket.id,name,score:0,answers:{},ready:true});
     rooms.set(c,r);socket.join(c);cb?.({room:pubRoom(r)});emitRoom(r);
   });
@@ -68,6 +69,8 @@ io.on("connection", socket=>{
   socket.on("game:start",({code:c},cb)=>{
     const r=rooms.get(String(c||"").toUpperCase());if(!r||r.hostId!==socket.id)return cb?.({error:"Nur der Host kann starten."});
     if(r.players.size<1)return cb?.({error:"Mindestens ein Spieler wird benötigt."});
+    if(r.status==="finished")return cb?.({error:"Das Spiel ist bereits beendet. Erstelle einen neuen Raum."});
+    if(r.round>=r.totalRounds)return cb?.({error:"Alle Runden sind bereits gespielt."});
     if(r.status==="playing")return cb?.({error:"Eine Runde läuft bereits."});
     r.round++;r.status="playing";r.letter=LETTERS[Math.floor(Math.random()*LETTERS.length)];
     r.roundResults=[];for(const p of r.players.values())p.answers={};
@@ -77,7 +80,7 @@ io.on("connection", socket=>{
   socket.on("answers:save",({code:c,answers},cb)=>{
     const r=rooms.get(String(c||"").toUpperCase()),p=r?.players.get(socket.id);
     if(!r||!p||r.status!=="playing")return cb?.({error:"Gerade läuft keine Runde."});
-    const next={};for(const cat of CATS)next[cat]=clean(answers?.[cat]||"").slice(0,50);
+    const next={};for(const cat of r.categories)next[cat]=clean(answers?.[cat]||"").slice(0,50);
     p.answers=next;cb?.({ok:true});
   });
   socket.on("game:finish",({code:c},cb)=>{
@@ -87,6 +90,7 @@ io.on("connection", socket=>{
   socket.on("game:next",({code:c},cb)=>{
     const r=rooms.get(String(c||"").toUpperCase());if(!r||r.hostId!==socket.id)return cb?.({error:"Nur der Host kann die nächste Runde starten."});
     if(r.status!=="review")return cb?.({error:"Die Auswertung ist noch nicht fertig."});
+    if(r.round>=r.totalRounds){r.status="finished";emitRoom(r);cb?.({ok:true,finished:true});return;}
     r.status="lobby";r.letter=null;r.endsAt=null;emitRoom(r);cb?.({ok:true});
   });
   socket.on("disconnect",()=>{

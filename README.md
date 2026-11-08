@@ -23,3 +23,6 @@
 - Räume und Punkte liegen aktuell im Arbeitsspeicher des Servers. Bei einem Neustart werden aktive Räume zurückgesetzt.
 - Inhaltliche Korrektheit (ob z. B. eine Antwort wirklich ein Land ist) wird nicht automatisch durch ein Lexikon geprüft; die Spielgruppe sollte die Auswertung kontrollieren.
 - Das ist ein lauffähiges Multiplayer-Grundgerüst, aber noch kein dauerhaft gespeichertes Turnier-/Account-System.
+
+
+Neue Funktionen: Beim Erstellen eines Raums können Kategorien und die Anzahl der Runden (3, 5, 10 oder 15) gewählt werden. Nach jeder Runde sehen alle Spieler die eingetragenen Antworten und Punkte.
